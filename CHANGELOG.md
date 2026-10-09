@@ -7,6 +7,11 @@
 
 ## [Unreleased]
 
+### 新增
+
+- 英文版 README（`README.md`，GitHub 預設顯示），繁體中文版在 `README.zh-TW.md`。
+- 流程圖也有英文版：`docs/workflow.html` 與 `docs/images/workflow.png` 是英文，中文版在 `docs/workflow.zh-TW.html` 與 `docs/images/workflow.zh-TW.png`。
+
 ---
 
 ## [0.1.0] - 2026-10-09

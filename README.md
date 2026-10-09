@@ -4,145 +4,147 @@
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-從持續母音 `/a:/` 的錄音偵測病理嗓音，並判別病變類別的研究程式。
+English | [繁體中文](README.zh-TW.md)
 
-這是研究用程式，沒有經過臨床驗證，也不是醫療器材，輸出不能當作診斷依據。
+Research code that detects pathological voice in recordings of the sustained vowel `/a:/` and classifies the type of disorder.
 
-它回答兩個問題：
+This is research code: it has not been clinically validated, it is not a medical device, and its output must not be used as the basis for a diagnosis.
 
-1. 偵測（第一階段）：這個嗓音是正常還是病理？
-2. 病變類別（第二階段）：若為病理，屬於 Neoplasm（腫瘤）、Phonotrauma（聲帶外傷）或 Vocal palsy（聲帶麻痺）中的哪一類？
+It answers two questions:
 
-方法上，先從音檔抽取 13 維梅爾頻率倒頻譜係數（MFCC），串接一階與二階差分成 39 維特徵，做倒頻譜正規化後，以類神經網路逐音框分類，再把音框的分數聚合成每位受試者一個判斷。用倒頻譜向量搭配深度網路偵測病理嗓音的做法，可參考 Fang et al. (2019)。四個類別的定義與 FEMH Voice Data Challenge 2018 的資料集相同（見 [References](#references)）。
+1. Detection (stage 1): is the voice normal or pathological?
+2. Disorder type (stage 2): if it is pathological, does it fall under Neoplasm (tumor), Phonotrauma (vocal fold trauma) or Vocal palsy (vocal fold paralysis)?
 
-MFCC、差分、STFT 頻譜圖、端點偵測與 UAR 這些共用的訊號處理與評估函式都來自 PyPI 上的 [`speechdsp`](https://pypi.org/project/speechdsp/)，這裡不重複實作。
+Every frame of a recording gives 13 mel-frequency cepstral coefficients (MFCCs), and appending the first- and second-order deltas brings that to 39 dimensions. After cepstral normalization, a neural network classifies every frame, and the frame scores are aggregated into one decision per subject. For detecting pathological voice with cepstral vectors and a deep network, see Fang et al. (2019). The four classes are defined as in the FEMH Voice Data Challenge 2018 dataset (see [References](#references)).
+
+The shared signal-processing and evaluation functions (MFCC, deltas, STFT spectrograms, endpoint detection and UAR) come from [`speechdsp`](https://pypi.org/project/speechdsp/) on PyPI rather than being reimplemented here.
 
 ---
 
-## 目錄
+## Contents
 
-- [專案簡介](#專案簡介)
-- [方法說明](#方法說明)
-- [安裝步驟](#安裝步驟)
-- [快速開始](#快速開始)
-- [使用範例](#使用範例)
-- [CLI 指令對照表](#cli-指令對照表)
-- [專案結構](#專案結構)
-- [資料準備](#資料準備)
-- [設定檔](#設定檔)
-- [結果與評估指標](#結果與評估指標)
-- [設計重點](#設計重點)
-- [開發與測試](#開發與測試)
+- [Overview](#overview)
+- [Method](#method)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Usage](#usage)
+- [CLI reference](#cli-reference)
+- [Project layout](#project-layout)
+- [Preparing the data](#preparing-the-data)
+- [Configuration](#configuration)
+- [Results and metrics](#results-and-metrics)
+- [Design notes](#design-notes)
+- [Development and testing](#development-and-testing)
 - [References](#references)
 
 ---
 
-## 專案簡介
+## Overview
 
-[![voice-pathology-detection 流程圖](docs/images/workflow.png)](https://raw.githack.com/recklight/voice-pathology-detection/master/docs/workflow.html?theme=dark)
+[![voice-pathology-detection workflow](docs/images/workflow.png)](https://raw.githack.com/recklight/voice-pathology-detection/master/docs/workflow.html?theme=dark)
 
-互動式流程圖：[線上瀏覽](https://raw.githack.com/recklight/voice-pathology-detection/master/docs/workflow.html?theme=dark)，或在本機用瀏覽器開啟 [`docs/workflow.html`](docs/workflow.html)。圖可以縮放、搜尋節點，也能追蹤任兩個步驟之間的路徑，例如看某一步的輸入從哪裡來。
+Interactive diagram: [view it online](https://raw.githack.com/recklight/voice-pathology-detection/master/docs/workflow.html?theme=dark), or open [`docs/workflow.html`](docs/workflow.html) in a browser on your machine. You can zoom, search for a node, or trace the path between any two steps, e.g. to see where a step's input comes from.
 
-粗糙聲、氣息聲、音高不穩與破碎的諧波結構都會反映在短時倒頻譜上，所以整條流程以逐音框的倒頻譜特徵為主，分成七個階段：
+Roughness, breathiness, unstable pitch and broken harmonic structure all show up in the short-time cepstrum, so the pipeline is built on frame-level cepstral features. It runs in seven stages:
 
-| 階段 | 做什麼 | 對應模組 |
+| Stage | What it does | Module |
 | --- | --- | --- |
-| 1. 裁切 | 去掉錄音前後的非發聲段落 | `voice_pathology_detection.data.trim` |
-| 2. 特徵抽取 | 每 30 ms 音框抽 13 維倒頻譜係數，加上 Δ 與 ΔΔ 成 39 維 | `voice_pathology_detection.features.mfcc` |
-| 3. 正規化 | 倒頻譜均值／變異數正規化，統計量只在訓練折上估計 | `voice_pathology_detection.features.normalize` |
-| 4. 分類 | 逐音框分類（類神經網路、DBN、SVM、GMM） | `voice_pathology_detection.models` |
-| 5. 聚合 | 把音框分數合成每位受試者一個決策 | `voice_pathology_detection.eval.aggregate` |
-| 6. 門檻 | 在保留資料上選出操作點 | `voice_pathology_detection.eval.threshold` |
-| 7. 評估 | 交叉驗證指標、圖表、預測結果落檔 | `voice_pathology_detection.eval` |
+| 1. Trimming | Removes the non-phonation parts at the start and end of a recording | `voice_pathology_detection.data.trim` |
+| 2. Feature extraction | 13 cepstral coefficients per 30 ms frame, plus Δ and ΔΔ for 39 dimensions | `voice_pathology_detection.features.mfcc` |
+| 3. Normalization | Cepstral mean/variance normalization, with statistics estimated on the training folds only | `voice_pathology_detection.features.normalize` |
+| 4. Classification | Frame-level classification (neural network, DBN, SVM, GMM) | `voice_pathology_detection.models` |
+| 5. Aggregation | Combines the frame scores into one decision per subject | `voice_pathology_detection.eval.aggregate` |
+| 6. Threshold | Chooses the operating point on held-out data | `voice_pathology_detection.eval.threshold` |
+| 7. Evaluation | Cross-validated metrics, figures and predictions written to disk | `voice_pathology_detection.eval` |
 
-兩條路線可以互相對照：
+There are two routes to compare:
 
-- `cascade`（兩階段串接）：先偵測，被判為病理者再送進三類分類器，最後合成 0/1/2/3 四類標籤。
-- `flat`（單階段四類）：一個分類器直接輸出四類。
+- `cascade` (two stages): detection runs first, whatever it calls pathological goes on to a three-class classifier, and the two results are merged into a four-class label 0/1/2/3.
+- `flat` (one stage, four classes): a single classifier outputs all four classes directly.
 
-兩條路線用同一組折、同一套評估與報表，拆成兩階段到底有沒有好處，可以直接從數字比較。
+Both routes run on identical folds with the same evaluation and reports, so comparing their numbers shows whether splitting the task into two stages helps at all.
 
 ---
 
-## 方法說明
+## Method
 
-### 音檔裁切
+### Trimming the recordings
 
-臨床錄音常在持續母音前後夾雜醫師與病人的對話，這些段落不是發聲，不該進入分析。裁切有兩種做法：
+Clinical recordings often have the doctor and the patient talking before and after the sustained vowel. That talk is not phonation and should stay out of the analysis. There are two ways to trim it:
 
-- `fixed_edges`：去頭去尾各 `edge_seconds` 秒，但只對長度超過 `min_seconds` 的錄音動刀，避免短提示音被整段切光。
-- `energy_vad`：以短時能量的雙門檻端點偵測（`speechdsp.endpoint_detect`）找出發聲段，不假設錄音一定是某種長度。
+- `fixed_edges`: cuts `edge_seconds` seconds from the start and from the end, but only from recordings longer than `min_seconds`, so a short recording of the prompted vowel alone is not cut away entirely.
+- `energy_vad`: finds the phonation with dual-threshold endpoint detection on the short-time energy (`speechdsp.endpoint_detect`), without assuming anything about the length of the recording.
 
-裁切後若短於 `min_output_seconds`，這次裁切就不算，保留未裁切的訊號並記一筆警告，參數設錯時才不會把整份錄音切掉。
+If the trimmed signal is shorter than `min_output_seconds`, the trim is thrown away: the untrimmed signal is kept and a warning is logged, so a wrong parameter cannot cut away a whole recording.
 
-### 倒頻譜特徵
+### Cepstral features
 
-對每個音框，訊號先經預強調 $y[n] = x[n] - \alpha\,x[n-1]$（$\alpha = 0.97$），加漢明窗，取功率頻譜，再通過 $M = 23$ 個在梅爾刻度上等距的三角濾波器：
+Each frame is pre-emphasized with $y[n] = x[n] - \alpha\,x[n-1]$ ($\alpha = 0.97$), Hamming-windowed and turned into a power spectrum, which then goes through $M = 23$ triangular filters spaced evenly on the mel scale:
 
 $$
 m = 1127 \ln\left(1 + \frac{f}{700}\right)
 $$
 
-取對數後做離散餘弦轉換，得到倒頻譜係數：
+The log filterbank energies go through a discrete cosine transform, which gives the cepstral coefficients:
 
 $$
 c_k = \sqrt{\frac{2}{M}} \sum_{m=1}^{M} \log(E_m) \cos\left(\frac{k\pi}{M}\left(m - \tfrac{1}{2}\right)\right),
 \qquad k = 0, 1, \ldots, 12
 $$
 
-再套用正弦倒頻譜提升（cepstral liftering），平衡各階係數的動態範圍：
+Sinusoidal cepstral liftering then evens out the dynamic range of the coefficients:
 
 $$
 \hat{c}_k = \left(1 + \frac{L}{2}\sin\frac{\pi k}{L}\right) c_k, \qquad L = 22
 $$
 
-輸出遵循 HTK 的 `MFCC_0` 排列：欄位順序為 $[c_1, \ldots, c_{12}, c_0]$，也就是第零階係數放在每個 13 維區塊的最後一欄，而不是第一欄。$c_0$ 採用與其他係數相同的 $\sqrt{2/M}$ 正規化因子；正交（orthonormal）DCT-II 對第零階用的是 $\sqrt{1/M}$，兩者差一個 $\sqrt{2}$，`features/mfcc.py` 裡補上了這個因子。
+The output follows HTK's `MFCC_0` layout. The columns are ordered $[c_1, \ldots, c_{12}, c_0]$: the zeroth coefficient is the last column of each 13-dimensional block, not the first. $c_0$ gets the same $\sqrt{2/M}$ scale factor as the other coefficients. An orthonormal DCT-II uses $\sqrt{1/M}$ for the zeroth term, a factor of $\sqrt{2}$ less, and `features/mfcc.py` puts that factor back.
 
-進入前端之前，訊號先經過一道零相位的 Butterworth 濾波器做頻帶限制，不會引入相位失真。預設 `low_freq: 64`、`high_freq: null`，也就是只有一個 64 Hz 的高通；要關掉高通，在設定檔裡寫 `low_freq: null`。
+Before the front end, a zero-phase Butterworth filter band-limits the signal without adding phase distortion. The defaults are `low_freq: 64` and `high_freq: null`, which is a 64 Hz high-pass and nothing else; to turn the high-pass off, write `low_freq: null` in the config file.
 
-### 動態特徵
+### Dynamic features
 
-靜態倒頻譜只描述單一個 30 ms 切片，而顫抖、粗糙度隨時間的起伏要看係數怎麼變化。以回歸式差分計算：
+A static cepstrum describes a single 30 ms slice. How tremor and roughness rise and fall over time shows up only in how the coefficients change. The deltas are computed by regression:
 
 $$
 d_t = \frac{\sum_{n=1}^{N} n \,(c_{t+n} - c_{t-n})}{2\sum_{n=1}^{N} n^2}
 $$
 
-其中 $N = (\text{width} - 1)/2$。一階差分預設視窗寬 7（$N = 3$）；二階（加速度）差分是對一階差分再做一次回歸，而不是對靜態係數取二階差分，預設視窗寬 5（$N = 2$）。邊界以首尾音框複製補足，因此音框數不變。最終特徵排列為：
+where $N = (\text{width} - 1)/2$. The first-order deltas use a window width of 7 ($N = 3$) by default. The second-order (acceleration) deltas apply the same regression to the first-order deltas, not a second difference to the static coefficients, with a default width of 5 ($N = 2$). Padding the edges with copies of the first and last frames keeps the number of frames unchanged. The final feature layout is:
 
 ```
-[c1..c12, c0 | Δc1..Δc12, Δc0 | ΔΔc1..ΔΔc12, ΔΔc0]     共 39 維
+[c1..c12, c0 | Δc1..Δc12, Δc0 | ΔΔc1..ΔΔc12, ΔΔc0]     39 dimensions
 ```
 
-### 倒頻譜正規化
+### Cepstral normalization
 
-「倒頻譜正規化」底下其實是三種不同的運算，混在一起講，數字就沒辦法互相比較。這裡把它們分開，共六種設定，由 `normalization.method` 選擇：
+"Cepstral normalization" covers three different operations, and once they are mixed up the numbers stop being comparable. I keep them apart here, as six settings selected with `normalization.method`:
 
-| `normalization.method` | 運算方式 | 是否有狀態 |
+| `normalization.method` | Operation | State |
 | --- | --- | --- |
-| `none` | 不做 | 無 |
-| `cvn_block` | 逐音框：把每個 13 維區塊（靜態／一階／二階）各自除以該區塊內係數的標準差 | 無狀態 |
-| `cmn` / `cvn` / `cmvn` | 沿時間軸：每個係數各自做零均值／單位變異數 | 有狀態，只在訓練折上 `fit` |
-| `cmvn_per_utt` | 同上，但統計量取自每份錄音自己 | 無狀態 |
+| `none` | Nothing is done | None |
+| `cvn_block` | Per frame: divides each 13-dimensional block (static / first-order / second-order) by the standard deviation of the coefficients in that block | Stateless |
+| `cmn` / `cvn` / `cmvn` | Along time: zero mean / unit variance for each coefficient separately | Stateful, `fit` on the training folds only |
+| `cmvn_per_utt` | Same as above, but the statistics come from each recording itself | Stateless |
 
-`cvn_block` 的三個區塊為 `0:13 / 13:26 / 26:39`，除以的是標準差（保持無因次）；要除以變異數，設定 `normalization.divisor: var`。`cmvn` 是文獻上的標準作法，統計量只在訓練折上估計，再原樣套用到驗證與測試折，評估折的統計量不會進到模型裡。
+The three `cvn_block` blocks are `0:13 / 13:26 / 26:39`, and the divisor is the standard deviation, which keeps the features dimensionless; to divide by the variance, set `normalization.divisor: var`. `cmvn` is the standard method in the literature. Its statistics are estimated on the training folds only and applied unchanged to the validation and test folds, so no statistic from an evaluation fold reaches the model.
 
-### 分類模型
+### Classifiers
 
-| 名稱 | 說明 |
+| Name | Description |
 | --- | --- |
-| `mlp` | sigmoid 多層感知器，SGD + 交叉熵；第一階段預設 5 層 × 200 神經元，第二階段與單階段四類預設 4 層 × 100 |
-| `dbn` | 深度信念網路：受限波茲曼機逐層非監督式預訓練，再監督式微調 |
-| `torch_dbn` | 同一種網路的 PyTorch 版（選配 extra `dl`），選項比 `dbn` 少，見下文 |
-| `svm` | RBF 核支援向量機，含標準化 |
-| `linear_svm` | 線性支援向量機 |
-| `gmm` | 每類別一個高斯混合模型，以貝氏定理合成後驗機率 |
+| `mlp` | Sigmoid multilayer perceptron, SGD with cross-entropy; 5 layers × 200 neurons by default for stage 1, 4 layers × 100 for stage 2 and for the single-stage four-class route |
+| `dbn` | Deep belief network: unsupervised layer-wise pre-training with restricted Boltzmann machines, then supervised fine-tuning |
+| `torch_dbn` | PyTorch version of the same network (optional extra `dl`), with fewer options than `dbn`; see below |
+| `svm` | RBF-kernel support vector machine, with standardization in front |
+| `linear_svm` | Linear support vector machine |
+| `gmm` | One Gaussian mixture model per class, combined into posteriors with Bayes' theorem |
 
-`dbn` 以受限波茲曼機逐層預訓練：以對比散度（CD-k）訓練，逐層把下層的隱藏層機率當作上層的輸入，訓練完的權重寫進前饋網路的隱藏層，再以反向傳播微調。設定 `pretrain: false` 可在完全相同的拓撲與種子下對照「有預訓練」與「隨機初始化」，直接量測預訓練帶來的差異。
+`dbn` pre-trains layer by layer with restricted Boltzmann machines trained by contrastive divergence (CD-k). The hidden-unit probabilities of each layer become the input of the layer above, the trained weights go into the hidden layers of a feedforward network, and backpropagation fine-tunes it. `pretrain: false` trains exactly the same topology with the same seed from random initialization, so comparing the two runs measures directly what pre-training adds.
 
-`torch_dbn` 是給大型語料用 GPU 跑的版本，只有 `dbn` 的一部分選項：預訓練固定是一步 Gibbs 取樣的對比散度，微調固定跑 `max_iter` 個 epoch 的 SGD（含 momentum），沒有 early stopping，也沒有 L2 懲罰。它接受 `hidden_layer_sizes`、`pretrain`、`pretrain_epochs`、`pretrain_learning_rate`、`max_iter`、`batch_size`、`learning_rate_init`、`momentum` 與 `device`；`cd_steps`、`update`、`alpha`、`early_stopping` 這些 `dbn` 專有的參數會直接報錯，所以 `configs/dbn_pretrained.yaml` 要先刪掉這些鍵，才能把模型名稱換成 `torch_dbn`。
+`torch_dbn` is for running large corpora on a GPU and supports only some of the `dbn` options. Pre-training is always contrastive divergence with a single Gibbs step, and fine-tuning always runs `max_iter` epochs of SGD with momentum, with no early stopping and no L2 penalty. It accepts `hidden_layer_sizes`, `pretrain`, `pretrain_epochs`, `pretrain_learning_rate`, `max_iter`, `batch_size`, `learning_rate_init`, `momentum` and `device`. The `dbn`-only parameters `cd_steps`, `update`, `alpha` and `early_stopping` raise an error, so delete those keys from `configs/dbn_pretrained.yaml` before changing the model name to `torch_dbn`.
 
-`dbn` 也可以把對比散度的梯度步換成最大熵的更新規則（`update: maxent`）。參數被視為帶高斯先驗（變異數 $\sigma^2$）的最大熵問題的拉格朗日乘子，每一步以牛頓法求解 Chen 與 Rosenfeld (2000) 的高斯先驗更新所給的穩定條件：
+`dbn` can also replace the gradient step of contrastive divergence with a maximum-entropy update rule (`update: maxent`). The parameters are treated as the Lagrange multipliers of a maximum-entropy problem with a Gaussian prior of variance $\sigma^2$, and each step uses Newton's method to solve the stationarity condition of the Gaussian-prior update in Chen and Rosenfeld (2000):
 
 $$
 f(\gamma) = F\sigma^2 e^{\gamma S} + \gamma + \lambda - \mu\sigma^2 = 0,
@@ -150,120 +152,120 @@ f(\gamma) = F\sigma^2 e^{\gamma S} + \gamma + \lambda - \mu\sigma^2 = 0,
 f'(\gamma) = F S \sigma^2 e^{\gamma S} + 1
 $$
 
-其中 $F$ 為模型期望、$\mu$ 為資料期望、$\lambda$ 為現有參數、$S = \sum_i F_i$。導數有閉合形式，牛頓法數次迭代即收斂，所有參數以 NumPy 一次向量化求解。先驗會把大幅的更新往零拉，可以壓住對比散度在前幾個 epoch 的劇烈震盪。
+Here $F$ is the model expectation, $\mu$ the data expectation, $\lambda$ the current parameter and $S = \sum_i F_i$. The derivative has a closed form, Newton's method converges within a few iterations, and all parameters are solved at once, vectorized in NumPy. The prior pulls large updates towards zero, which can damp the heavy oscillation of contrastive divergence in the first few epochs.
 
-### 音框到受試者的聚合
+### From frames to subjects
 
-模型看的是 30 ms 的音框，要回答的卻是一個人的狀況，所以中間需要一步聚合，而選哪條規則會影響結果：
+The model looks at 30 ms frames, but the question is about a person. An aggregation step sits in between, and which rule it uses changes the result:
 
-| `aggregation` | 規則 |
+| `aggregation` | Rule |
 | --- | --- |
-| `mean_proba` | 對錄音內所有音框的後驗機率取平均，再取最大（預設） |
-| `majority_vote` | 統計硬決策票數，取最多票 |
-| `ratio_threshold` | 二元任務專用：病理音框比例達到門檻即判為病理 |
+| `mean_proba` | Averages the posteriors over all frames of the recording and picks the class with the highest average (default) |
+| `majority_vote` | Counts the hard decisions and takes the class with the most votes |
+| `ratio_threshold` | Binary tasks only: pathological once the share of pathological frames reaches the threshold |
 
-預設用平均後驗機率，因為它保留每個音框的信心程度，硬投票只看每一框判給哪一類。
+The mean posterior is the default because it keeps how confident each frame is, while a hard vote only sees which class each frame went to.
 
-### 決策門檻
+### Decision threshold
 
-門檻在訓練折內部再切出的驗證集上決定，評估折不參與：
+The threshold is set on a validation set split off inside the training folds; the evaluation fold has no part in it:
 
-- `youden`：最大化 Youden's J，也就是 $\text{sensitivity} + \text{specificity} - 1$，兩類錯誤成本相同時的預設。
-- `target_sensitivity` / `target_specificity`：在達到指定靈敏度（或特異度）的門檻中，取另一軸最好的一個。
-- `fixed`：直接用設定檔給的數值，用於重現特定設定。
+- `youden`: maximizes Youden's J, i.e. $\text{sensitivity} + \text{specificity} - 1$. The default when both kinds of error cost the same.
+- `target_sensitivity` / `target_specificity`: among the thresholds that reach the given sensitivity (or specificity), takes the one with the best specificity (or sensitivity).
+- `fixed`: uses the value in the config file unchanged, to reproduce a particular setup.
 
-在驗證集上，最低的判陽分數與最高的判陰分數之間，任何一個門檻的結果都相同。這裡取兩者的中點，而不是貼著最低的判陽分數，新受試者的分數稍低一點時仍會被判為病理。門檻比較的對象隨聚合規則而定：`mean_proba` 比的是病理類別的平均後驗機率，`majority_vote` 與 `ratio_threshold` 比的是病理音框的比例。
+On the validation set, every threshold between the lowest score called positive and the highest score called negative gives the same result. I put the threshold at the midpoint of the two rather than right at the lowest positive score, so a new subject whose score is slightly lower is still called pathological. What the threshold is compared with depends on the aggregation rule: the mean posterior of the pathological class for `mean_proba`, and the share of pathological frames for `majority_vote` and `ratio_threshold`.
 
-驗證集的大小由 `split.val_fraction` 決定。實際做法是把訓練折再做一次分組、分層的 k 折，取其中一折，k = round(1 / val_fraction)，所以 0.2 保留五分之一，0.3 保留三分之一，0.4 與 0.5 都是一半，大於 0.5 的值會被拒絕。訓練折裡某一類只有不到 k 組時，k 會降到那個組數，保留的比例就跟著變大。訓練折小到切不出兩類都有的驗證集時，該折退回固定門檻 0.5，並在日誌留下警告。
+The size of the validation set comes from `split.val_fraction`. The training folds go through one more grouped, stratified k-fold split and one of those folds is held out, with k = round(1 / val_fraction). So 0.2 holds out a fifth, 0.3 a third, 0.4 and 0.5 both a half, and values above 0.5 are rejected. If a class has fewer than k groups in the training folds, k drops to that number of groups and the held-out share grows with it. When the training folds are too small to give a validation set that contains both classes, that fold falls back to a fixed threshold of 0.5 and logs a warning.
 
-每一折選出的門檻都會寫進 `metrics.json`，各折差多少可以直接看到。
+The threshold chosen in each fold is written to `metrics.json`, where you can see straight away how far the folds differ.
 
 ---
 
-## 安裝步驟
+## Installation
 
-需要 Python 3.10 以上。
+Requires Python 3.10 or newer.
 
 ```bash
 git clone https://github.com/recklight/voice-pathology-detection.git
 cd voice-pathology-detection
 
-# 1. 安裝本專案（共用套件 speechdsp 會一併從 PyPI 安裝）
+# 1. Install the package (the shared speechdsp package comes from PyPI with it)
 pip install -e .
 
-# 2. 若要開發與執行測試
+# 2. For development and running the tests
 pip install -e ".[dev]"
 
-# 3. 選配：PyTorch 版的 DBN（沒有它，其餘功能完全不受影響）
+# 3. Optional: the PyTorch DBN (everything else works exactly the same without it)
 pip install -e ".[dl]"
 ```
 
-主要相依套件：`speechdsp>=0.2.0`、`numpy>=1.24`、`scipy>=1.10`、`scikit-learn>=1.2`、`pandas>=1.5`、`matplotlib>=3.6`、`pyyaml`、`typer`、`joblib`、`openpyxl`。程式碼同時相容 NumPy 1.x 與 2.x：CI 除了用最新版本測試，另有一個 job 以上面這些最低版本跑完整測試。
+Main dependencies: `speechdsp>=0.2.0`, `numpy>=1.24`, `scipy>=1.10`, `scikit-learn>=1.2`, `pandas>=1.5`, `matplotlib>=3.6`, `pyyaml`, `typer`, `joblib`, `openpyxl`. The code works with both NumPy 1.x and 2.x: besides testing against the latest releases, CI has a job that runs the full suite on the minimum versions above.
 
 ---
 
-## 快速開始
+## Quick start
 
-不需要任何資料，就能把整條流程跑完一次：
+You can run the whole pipeline end to end without any data:
 
 ```bash
 voice-pathology-detection demo --out-dir results/demo
 ```
 
-這個指令會在暫存資料夾中合成一小批人工母音，跑完兩階段串接，並把設定、指標、預測與圖表寫進 `results/demo/demo-<時間戳>/`。合成資料的數字跟真實嗓音的表現無關，只用來確認整條流程跑得通，而且同一個種子會得到同樣的結果。
+This synthesizes a small batch of artificial vowels in a temporary folder, runs the two-stage cascade, and writes the config, metrics, predictions and figures to `results/demo/demo-<timestamp>/`. Numbers from synthetic data say nothing about how well real voices are handled. They only show that the pipeline runs from end to end and that the same seed gives the same result.
 
-有真實資料時：
+With real data:
 
 ```bash
-# 1. 建立索引，檢查各類別檔案數
+# 1. Build the index and check the file count of each class
 voice-pathology-detection prepare --data-root /path/to/corpus
 
-# 2. 跑兩階段串接的交叉驗證
+# 2. Cross-validate the two-stage cascade
 voice-pathology-detection train --route cascade --config configs/detection_dnn.yaml \
     --set paths.data_root=/path/to/corpus
 
-# 3. 對測試集推論，寫出預測表
+# 3. Predict on the test set and write the prediction table
 voice-pathology-detection predict results/cascade-20261008-101500 \
     --set paths.data_root=/path/to/corpus --output predictions.xlsx
 ```
 
-`prepare` 預設會把各類別的檔案數拿去和參考語料的組成（Normal 50、Neoplasm 40、Phonotrauma 60、Vocal palsy 50）比對，不符只記錄警告；加上 `--strict` 則直接報錯。你的資料集本來就不是這個組成的話，忽略該警告即可，或用 Python API 傳入自己的 `expected_counts`（見 [docs/data-format.md](docs/data-format.md)）。
+By default `prepare` compares the file count of each class with the make-up of the reference corpus (Normal 50, Neoplasm 40, Phonotrauma 60, Vocal palsy 50) and only logs a warning when they differ; `--strict` turns that into an error. If your dataset was never meant to look like that, ignore the warning, or pass your own `expected_counts` through the Python API (see [docs/data-format.md](docs/data-format.md); the documents under `docs/` are in Traditional Chinese).
 
-`predict` 會用結果資料夾裡的 `config.yaml` 當起點，所以通常只要給資料位置。模型是用哪一組 `mfcc` 與 `trim` 設定訓練的，推論時就得用同一組；`--config` 或 `--set` 若改到這兩個區段，會直接報錯並列出不同的鍵。
+`predict` starts from the `config.yaml` in the results folder, so it usually needs nothing more than where the data is. Prediction has to use the same `mfcc` and `trim` settings the model was trained with. If `--config` or `--set` changes either of those sections, it stops with an error that lists the keys that differ.
 
-結果資料夾裡有 `flat.joblib` 就用它，否則讀 `detection.joblib` 與 `disorder.joblib`，偵測器套用訓練時選出的門檻，因此要指向 `--route flat` 或 `--route cascade` 的產出；只跑 `detection` 或 `disorder` 的資料夾少了另一個模型，會得到一則指名缺少哪個檔案的錯誤。預測表有 `File name` 與 `Prediction`（0–3）兩欄，未指定 `--output` 時寫成結果資料夾裡的 `predictions_<split>.xlsx`。
+If the results folder contains `flat.joblib`, that model is used. Otherwise `predict` reads `detection.joblib` and `disorder.joblib`, and the detector applies the threshold chosen during training. Point it at the output of `--route flat` or `--route cascade`: a folder from `detection` or `disorder` alone lacks the other model, and the error names the missing file. The prediction table has two columns, `File name` and `Prediction` (0–3). Without `--output` it is written to `predictions_<split>.xlsx` in the results folder.
 
 ---
 
-## 使用範例
+## Usage
 
 ### CLI
 
 ```bash
-# 查看解析後的完整設定與可用模型
+# Show the fully resolved config and the available models
 voice-pathology-detection info --config configs/default.yaml
 
-# 只跑第一階段（正常 vs 病理），設成 5 折、換成支援向量機
+# Stage 1 only (normal vs pathological), with 5 folds and a support vector machine
 voice-pathology-detection train --route detection \
     --config configs/detection_dnn.yaml \
     --folds 5 --model svm \
     --set paths.data_root=/path/to/corpus
 
-# 比較單階段四類與兩階段串接
+# Compare the single-stage four-class route with the two-stage cascade
 voice-pathology-detection train --route flat    --config configs/flat_dnn.yaml
 voice-pathology-detection train --route cascade --config configs/detection_dnn.yaml
 
-# 抽特徵並快取，之後的實驗就不必重算
+# Extract and cache the features so later experiments do not recompute them
 voice-pathology-detection features --config configs/default.yaml --output cache/train.npz
 
-# 畫窄頻頻譜圖（正常與三種病理的諧波結構對比）
+# Narrowband spectrograms (harmonic structure of a normal voice against the three disorders)
 voice-pathology-detection spectrograms normal.wav neoplasm.wav phonotrauma.wav palsy.wav \
     --output results/figures/spectrograms.png
 ```
 
-`--model` 換掉的是估計器本身。設定檔裡的 `model.params` 是給原本那個模型用的（例如網路的層數），套到支援向量機上會直接出錯，所以 `--model` 會連同參數一起清掉，讓新模型使用自己的預設值。要自己指定參數，就在同一道指令裡加上 `--set <區段>.model.params='{...}'`（區段是 `detection`、`disorder` 或 `flat`），整組參數會被保留；只給單一個鍵，例如 `--set detection.model.params.C=2`，則是加在清空後的參數上。
+`--model` replaces the estimator itself. The `model.params` in the config file were written for the model being replaced (the number of network layers, for example) and would make a support vector machine fail, so `--model` clears them too and the new model runs with its own defaults. To set your own parameters, add `--set <section>.model.params='{...}'` to the same command (the section is `detection`, `disorder` or `flat`), and the whole set is kept. A single key, such as `--set detection.model.params.C=2`, is added to the now-empty params instead.
 
-`--set` 可以覆寫任何一項設定，可重複使用：
+`--set` overrides any setting and can be repeated:
 
 ```bash
 voice-pathology-detection train --route cascade \
@@ -272,7 +274,7 @@ voice-pathology-detection train --route cascade \
     --set detection.threshold_method=target_sensitivity \
     --set detection.target=0.95
 
-# 換模型並自己給參數：--model 不會清掉你明確指定的 params
+# Change the model and set its parameters: --model does not clear params you set explicitly
 voice-pathology-detection train --route detection --model dbn \
     --set detection.model.params='{"hidden_layer_sizes": [200, 200], "pretrain": true}'
 ```
@@ -284,33 +286,33 @@ from voice_pathology_detection import (
     Config, build_index, extract_corpus, run_cascade, save_run, set_global_seed,
 )
 
-# 1. 設定：路徑與超參數都在設定物件裡
+# 1. Config: paths and hyperparameters all live in the config object
 cfg = Config.from_yaml("configs/detection_dnn.yaml").override(
     {"paths.data_root": "/path/to/corpus", "split.n_splits": 5, "seed": 0}
 )
 set_global_seed(cfg.seed)
 
-# 2. 建索引：逐資料夾掃描，並檢查每個類別的檔案數是否符合預期
+# 2. Index: scan the folders and check each class's file count against the expected one
 index = build_index(cfg, strict_counts=True)
 print(index[["subject_id", "label_name", "split"]].head())
 
-# 3. 抽特徵：回傳的 FeatureSet 同時保有音框矩陣與「每個音框來自哪份錄音」
+# 3. Features: the FeatureSet keeps the frame matrix and which recording each frame came from
 features = extract_corpus(index, cfg, cache_dir=cfg.paths.cache_dir)
 print(features.X.shape, features.n_files, features.group_sizes.sum())
 
-# 4. 跑兩階段串接的交叉驗證
+# 4. Cross-validate the two-stage cascade
 result = run_cascade(features, cfg)
-print(f"四類 UAR = {result.overall_summary['uar']['mean']:.4f} "
+print(f"four-class UAR = {result.overall_summary['uar']['mean']:.4f} "
       f"± {result.overall_summary['uar']['std']:.4f}")
-print(f"偵測靈敏度 = {result.detection_summary['sensitivity']['mean']:.4f}")
-print(f"每折選出的門檻：{result.thresholds}")
+print(f"detection sensitivity = {result.detection_summary['sensitivity']['mean']:.4f}")
+print(f"threshold chosen in each fold: {result.thresholds}")
 
-# 5. 落檔：設定、指標、報表與逐受試者的預測全部寫進同一個資料夾
+# 5. Save: config, metrics, reports and per-subject predictions all go into one folder
 run_dir = save_run(cfg.paths.results_dir, cfg, result.to_dict(),
                    tables={"predictions": result.predictions})
 ```
 
-單獨使用前端與正規化：
+The front end and normalization on their own:
 
 ```python
 import numpy as np
@@ -320,15 +322,15 @@ from voice_pathology_detection import Config, extract_features, make_normalizer,
 cfg = Config()
 audio, sr = read_wav("subject_001.wav")
 
-trimmed = trim_audio(audio, sr, cfg.trim)          # 去掉非發聲段落
-X = extract_features(trimmed.audio, sr, cfg.mfcc)  # (音框數, 39)
+trimmed = trim_audio(audio, sr, cfg.trim)          # drop the non-phonation parts
+X = extract_features(trimmed.audio, sr, cfg.mfcc)  # (frames, 39)
 
 normalizer = make_normalizer(cfg.normalization).fit(X)
 X_norm = normalizer.transform(X)
 print(X.shape, trimmed.duration(sr))
 ```
 
-自己串一個偵測實驗（接續上面的 `features`）。門檻在訓練折切出的驗證集上選，再拿到評估折上用：
+A detection experiment put together by hand (continuing from `features` above). The threshold is chosen on the validation set split off the training folds and then used on the evaluation fold:
 
 ```python
 from voice_pathology_detection.data.splits import (
@@ -340,9 +342,9 @@ from voice_pathology_detection.eval.threshold import select_threshold
 from voice_pathology_detection.models.registry import build_model
 from voice_pathology_detection.routes import binary_view
 
-binary = binary_view(features)                  # 標籤變成 0 = 正常、1 = 病理
+binary = binary_view(features)                  # labels become 0 = normal, 1 = pathological
 folds = subject_folds(binary.files, n_splits=5, seed=0)
-check_no_group_leakage(binary.files, folds)     # 同一位受試者不會跨折
+check_no_group_leakage(binary.files, folds)     # no subject ends up in two folds
 
 fold = folds[0]
 fit_rows, val_rows = train_val_split(binary.files, fold.train, val_fraction=0.2, seed=0)
@@ -357,119 +359,122 @@ pred = (test.score(1) >= choice.threshold).astype(int)
 report = evaluate(test_set.file_labels, pred, test.score(1), level="subject")
 ```
 
-### 範例腳本
+### Example scripts
 
-`examples/` 底下兩支腳本完全以合成資料執行，不需要任何錄音：
+The two scripts in `examples/` run entirely on synthetic data and need no recordings:
 
 ```bash
 python examples/end_to_end_synthetic.py --out-dir results/example
 python examples/compare_normalizations.py --out-csv results/comparison.csv
 ```
 
-前者跑完整條流程並比較兩條路線；後者在完全相同的折與種子上，逐一比較四種正規化設定（`none`、`cvn_block`、`cmvn`、`cmvn_per_utt`）與三種模型，表上每一列只差一個變因。
+The first runs the whole pipeline and compares the two routes. The second compares four normalization settings (`none`, `cvn_block`, `cmvn`, `cmvn_per_utt`) and three models on exactly the same folds and seed, so each row of the table changes one variable and nothing else.
 
 ---
 
-## CLI 指令對照表
+## CLI reference
 
-| 指令 | 用途 | 常用選項 |
+| Command | Purpose | Common options |
 | --- | --- | --- |
-| `voice-pathology-detection info` | 顯示解析後的設定、可用模型與類別編碼 | `--config`、`--set` |
-| `voice-pathology-detection prepare` | 掃描資料夾建立索引，檢查各類別檔案數 | `--data-root`、`--split`、`--strict`／`--no-strict`、`--output` |
-| `voice-pathology-detection features` | 抽取並快取音框特徵矩陣 | `--config`、`--split`、`--output` |
-| `voice-pathology-detection train` | 交叉驗證一條路線，輸出指標、圖表與模型 | `--route`、`--folds`、`--model`、`--normalization`、`--run-id` |
-| `voice-pathology-detection predict` | 以存下的模型推論新錄音，寫出預測表 | `--data-root`、`--split`、`--output` |
-| `voice-pathology-detection spectrograms` | 畫窄頻頻譜圖 | `--n-fft`、`--noverlap`、`--max-freq` |
-| `voice-pathology-detection demo` | 以合成音檔跑完整流程，不需資料 | `--per-class`、`--folds`、`--out-dir` |
+| `voice-pathology-detection info` | Shows the resolved config, the available models and the class encoding | `--config`, `--set` |
+| `voice-pathology-detection prepare` | Scans the folders into an index and checks the file count of each class | `--data-root`, `--split`, `--strict` / `--no-strict`, `--output` |
+| `voice-pathology-detection features` | Extracts and caches the frame feature matrix | `--config`, `--split`, `--output` |
+| `voice-pathology-detection train` | Cross-validates one route and writes metrics, figures and models | `--route`, `--folds`, `--model`, `--normalization`, `--run-id` |
+| `voice-pathology-detection predict` | Runs a saved model on new recordings and writes a prediction table | `--data-root`, `--split`, `--output` |
+| `voice-pathology-detection spectrograms` | Draws narrowband spectrograms | `--n-fft`, `--noverlap`, `--max-freq` |
+| `voice-pathology-detection demo` | Runs the whole pipeline on synthetic audio, no data needed | `--per-class`, `--folds`, `--out-dir` |
 
-`--route` 的四個選項：
+The four values of `--route`:
 
-| 值 | 意義 |
+| Value | Meaning |
 | --- | --- |
-| `detection` | 第一階段：正常 vs 病理 |
-| `disorder` | 第二階段：三種病變類別（只用病理錄音訓練與評估） |
-| `cascade` | 兩階段串接，合成 0/1/2/3 四類最終標籤 |
-| `flat` | 單階段四類分類器（對照組） |
+| `detection` | Stage 1: normal vs pathological |
+| `disorder` | Stage 2: the three disorder types (trained and evaluated on pathological recordings only) |
+| `cascade` | Both stages in cascade, merged into a final four-class label 0/1/2/3 |
+| `flat` | Single-stage four-class classifier (the comparison baseline) |
 
 ---
 
-## 專案結構
+## Project layout
 
 ```
 voice-pathology-detection/
 ├── README.md
+├── README.zh-TW.md                   # Traditional Chinese README
 ├── LICENSE
 ├── pyproject.toml
-├── configs/                          # 設定檔，實驗參數全部在這裡
-│   ├── default.yaml                  # 內建預設值的完整寫法
-│   ├── mfcc_30ms.yaml                # 30 ms / 15 ms / 23 mel 的前端設定
-│   ├── detection_dnn.yaml            # 第一階段：5 層 × 200
-│   ├── disorder_dnn.yaml             # 第二階段：4 層 × 100
-│   ├── flat_dnn.yaml                 # 單階段四類：4 層 × 100
-│   ├── dbn_pretrained.yaml           # 含 RBM 預訓練的 DBN
-│   └── baselines.yaml                # 淺層對照組（SVM、GMM）
+├── configs/                          # config files; every experiment parameter lives here
+│   ├── default.yaml                  # the built-in defaults written out in full
+│   ├── mfcc_30ms.yaml                # front end with 30 ms / 15 ms / 23 mel
+│   ├── detection_dnn.yaml            # stage 1: 5 layers × 200
+│   ├── disorder_dnn.yaml             # stage 2: 4 layers × 100
+│   ├── flat_dnn.yaml                 # single-stage four-class: 4 layers × 100
+│   ├── dbn_pretrained.yaml           # DBN with RBM pre-training
+│   └── baselines.yaml                # shallow baselines (SVM, GMM)
 ├── docs/
-│   ├── images/workflow.png           # README 的流程圖
-│   ├── workflow.html                 # 互動式流程圖（瀏覽器開啟）
-│   ├── algorithms.md                 # 每個演算法的數學式與參數
-│   ├── data-format.md                # 資料格式與標籤編碼
-│   └── reproduce.md                  # 如何重現一次實驗
+│   ├── images/workflow.png           # the README figure
+│   ├── images/workflow.zh-TW.png     # the same figure in Traditional Chinese
+│   ├── workflow.html                 # interactive diagram (open in a browser)
+│   ├── workflow.zh-TW.html           # the same diagram in Traditional Chinese
+│   ├── algorithms.md                 # equations and parameters of each algorithm
+│   ├── data-format.md                # data formats and label encoding
+│   └── reproduce.md                  # how to reproduce a run
 ├── examples/
-│   ├── end_to_end_synthetic.py       # 合成資料的完整示範
-│   └── compare_normalizations.py     # 正規化設定與模型的比較表
+│   ├── end_to_end_synthetic.py       # full walkthrough on synthetic data
+│   └── compare_normalizations.py     # comparison table of normalizations and models
 ├── src/voice_pathology_detection/
-│   ├── __init__.py                   # 公開 API 的 re-export
-│   ├── config.py                     # 設定物件（dataclass + YAML + 驗證）
-│   ├── seed.py                       # 統一設定亂數種子並記錄
-│   ├── logging_utils.py              # 記錄設定
-│   ├── cli.py                        # typer 命令列介面
-│   ├── prediction_table.py           # predict 寫出的預測表（File name / Prediction）
+│   ├── __init__.py                   # re-exports of the public API
+│   ├── config.py                     # config object (dataclass + YAML + validation)
+│   ├── seed.py                       # sets every random seed in one place and records it
+│   ├── logging_utils.py              # logging setup
+│   ├── cli.py                        # typer command-line interface
+│   ├── prediction_table.py           # the table predict writes (File name / Prediction)
 │   ├── data/
-│   │   ├── labels.py                 # 類別編碼、名稱、二元映射、檔案數檢查
-│   │   ├── dataset.py                # 建立檔案索引（資料夾或標註表）
-│   │   ├── trim.py                   # 音檔裁切（fixed_edges / energy_vad）
-│   │   ├── splits.py                 # 分組、分層的 k 折交叉驗證
-│   │   └── synthetic.py              # 合成母音與合成特徵矩陣
+│   │   ├── labels.py                 # class codes, names, binary mapping, file-count check
+│   │   ├── dataset.py                # builds the file index (folders or a label table)
+│   │   ├── trim.py                   # trimming (fixed_edges / energy_vad)
+│   │   ├── splits.py                 # grouped, stratified k-fold cross-validation
+│   │   └── synthetic.py              # synthetic vowels and synthetic feature matrices
 │   ├── features/
-│   │   ├── mfcc.py                   # HTK MFCC_0 排列的倒頻譜前端
-│   │   ├── deltas.py                 # 回歸式 Δ / ΔΔ 與區塊切分
-│   │   ├── normalize.py              # 六種正規化設定（sklearn 介面）
-│   │   └── pipeline.py               # FeatureSet：音框、來源與索引的綁定
+│   │   ├── mfcc.py                   # cepstral front end in the HTK MFCC_0 layout
+│   │   ├── deltas.py                 # regression Δ / ΔΔ and block slicing
+│   │   ├── normalize.py              # the six normalization settings (sklearn interface)
+│   │   └── pipeline.py               # FeatureSet: frames bound to their source and index
 │   ├── models/
-│   │   ├── mlp.py                    # sigmoid 多層感知器
-│   │   ├── rbm.py                    # 受限波茲曼機（CD-k / maxent）
-│   │   ├── maxent.py                 # 最大熵乘子的牛頓法求解
-│   │   ├── dbn.py                    # 逐層預訓練 + 監督式微調
-│   │   ├── torch_dbn.py              # 選配的 PyTorch 版本
-│   │   ├── svm.py                    # 支援向量機對照組
-│   │   ├── gmm.py                    # 高斯混合模型對照組
-│   │   └── registry.py               # 由名稱建立模型
+│   │   ├── mlp.py                    # sigmoid multilayer perceptron
+│   │   ├── rbm.py                    # restricted Boltzmann machine (CD-k / maxent)
+│   │   ├── maxent.py                 # Newton solver for the maximum-entropy multipliers
+│   │   ├── dbn.py                    # layer-wise pre-training + supervised fine-tuning
+│   │   ├── torch_dbn.py              # the optional PyTorch version
+│   │   ├── svm.py                    # support vector machine baselines
+│   │   ├── gmm.py                    # Gaussian mixture model baseline
+│   │   └── registry.py               # builds a model from its name
 │   ├── routes/
-│   │   ├── stage.py                  # 共用的訓練與評估迴圈
-│   │   ├── detection.py              # 第一階段
-│   │   ├── disorder.py               # 第二階段
-│   │   ├── cascade.py                # 兩階段串接
-│   │   └── flat.py                   # 單階段四類
+│   │   ├── stage.py                  # shared training and evaluation loop
+│   │   ├── detection.py              # stage 1
+│   │   ├── disorder.py               # stage 2
+│   │   ├── cascade.py                # two-stage cascade
+│   │   └── flat.py                   # single-stage four-class
 │   ├── eval/
-│   │   ├── aggregate.py              # 音框 → 受試者
-│   │   ├── threshold.py              # 門檻選擇與掃描
-│   │   ├── metrics.py                # UAR、靈敏度、特異度、PPV/NPV、AUC
-│   │   ├── plots.py                  # 混淆矩陣、門檻曲線、ROC、頻譜圖
+│   │   ├── aggregate.py              # frames → subjects
+│   │   ├── threshold.py              # threshold selection and sweep
+│   │   ├── metrics.py                # UAR, sensitivity, specificity, PPV/NPV, AUC
+│   │   ├── plots.py                  # confusion matrices, threshold curves, ROC, spectrograms
 │   │   └── report.py                 # metrics.json / report.md / config.yaml
 │   └── fusion/
-│       └── score_fusion.py           # 多系統分數融合（網格搜尋與 stacking）
-└── tests/                            # 全部使用程式合成的 fixture
+│       └── score_fusion.py           # score fusion across systems (grid search and stacking)
+└── tests/                            # all fixtures are generated in code
 ```
 
 ---
 
-## 資料準備
+## Preparing the data
 
-套件裡沒有任何錄音，資料請自行準備，再用設定指向它。
+No recordings come with the package. You need your own data, and the configuration has to point at it.
 
-### 支援的資料夾結構
+### Supported folder layouts
 
-#### 方式一：一個診斷一個資料夾（建議）
+#### Option 1: one folder per diagnosis (recommended)
 
 ```
 /your/data/root/
@@ -482,85 +487,85 @@ voice-pathology-detection/
     └── *.wav
 ```
 
-資料夾名稱不分大小寫，`Vocal palsy`、`vocal_palsy`、`VocalPalsy`、`palsy` 都可以被辨識。
+Folder names are case-insensitive: `Vocal palsy`, `vocal_palsy`, `VocalPalsy` and `palsy` are all recognized.
 
-#### 方式二：扁平資料夾 + 標註表
+#### Option 2: flat folders plus a label table
 
 ```
 /your/data/root/
 ├── train/                 001.wav 002.wav ...
 ├── test/                  *.wav
-└── Demographics.xlsx      欄位：File name / Diagnosis(0-3) / Gender / Age
+└── Demographics.xlsx      columns: File name / Diagnosis(0-3) / Gender / Age
 ```
 
-設定 `paths.demographics: Demographics.xlsx` 即可，`.csv` 與 `.tsv` 也可以。表格的欄位名稱會以不分大小寫的別名比對，`File name`、`filename`、`Diagnosis(0-3)`、`label` 等都能辨識。每一格都以文字讀入，`001` 這種檔名會保留前導零，檔名可含或不含副檔名。有錄音在表格中找不到、或診斷欄是空白的，會直接報錯並列出那些檔名，不會靜默跳過。
+Set `paths.demographics: Demographics.xlsx`; `.csv` and `.tsv` work as well. Column names are matched against case-insensitive aliases: `File name`, `filename`, `Diagnosis(0-3)`, `label` and similar names are all recognized. Every cell is read as text, which keeps the leading zeros of a file name like `001`, and file names may be given with or without the extension. Recordings that are missing from the table, or whose diagnosis cell is empty, raise an error that lists their file names instead of being skipped silently.
 
-同一個人有多份錄音時，在表格加一欄 `Subject ID`（或 `Speaker`），再設定 `split.group_by: speaker_id`，同一個人的錄音就會落在同一折，內層驗證集也一樣。表格沒給說話者的錄音自成一組。
+When one person has several recordings, add a `Subject ID` (or `Speaker`) column to the table and set `split.group_by: speaker_id`. All recordings of one person then land in the same fold, and the inner validation split keeps them together as well. A recording with no speaker in the table forms a group of its own.
 
-### 音檔格式
+### Audio format
 
-- WAV 格式，單聲道或多聲道（多聲道會自動平均成單聲道）
-- 取樣率請與 `mfcc.sample_rate` 一致；不一致時會記一筆警告，照實際取樣率分析
-- 內容為持續母音 `/a:/`
-- 長度不限，但短於一個音框（預設 30 ms）或含有 NaN、無限大取樣值的錄音會被跳過，日誌會記下跳過的份數與前三個檔名
+- WAV, mono or multichannel (multichannel audio is averaged down to mono)
+- The sample rate should match `mfcc.sample_rate`; if it does not, a warning is logged and the actual sample rate is used
+- A sustained `/a:/` vowel
+- Any length, but recordings shorter than one frame (30 ms by default) or containing NaN or infinite samples are skipped, and the log records how many were skipped along with the first three file names
 
-### 標籤編碼
+### Label encoding
 
-| 編碼 | 四類任務 | 二元任務 |
+| Code | Four-class task | Binary task |
 | --- | --- | --- |
 | 0 | Normal | Normal |
 | 1 | Neoplasm | Pathological |
 | 2 | Phonotrauma | Pathological |
 | 3 | Vocal palsy | Pathological |
 
-### 指向你的資料
+### Pointing to your data
 
-三種方式擇一：
+Any one of these three works:
 
 ```bash
-# a. 命令列參數
+# a. Command-line option
 voice-pathology-detection train --data-root /your/data/root
 
-# b. --set 覆寫
+# b. Override with --set
 voice-pathology-detection train --set paths.data_root=/your/data/root
 
-# c. 自己的設定檔
-cp configs/default.yaml configs/local.yaml   # 編輯其中的 paths.data_root
+# c. Your own config file
+cp configs/default.yaml configs/local.yaml   # then edit paths.data_root in it
 voice-pathology-detection train --config configs/local.yaml
 ```
 
-`data/`、`results/`、`cache/`、`configs/local*.yaml`，以及所有 `*.wav`、`*.npy`、`*.npz`、`*.joblib`、`*.xlsx`、`*.csv`、`*.tsv` 都列在 `.gitignore` 裡：標註表、索引與預測表帶有檔名和診斷，自己的設定檔則帶有本機路徑。
+`data/`, `results/`, `cache/`, `configs/local*.yaml` and every `*.wav`, `*.npy`, `*.npz`, `*.joblib`, `*.xlsx`, `*.csv` and `*.tsv` are listed in `.gitignore`: label tables, indexes and prediction tables carry file names and diagnoses, and your own config files carry local paths.
 
 ---
 
-## 設定檔
+## Configuration
 
-設定是巢狀的 dataclass，載入時會逐項驗證，寫錯的鍵會被指名：
+The configuration is a nested dataclass. Every field is validated on load, and a wrong key is named in the error:
 
 ```
 ConfigError: unknown configuration key(s): ['mfcc.window_ms'];
 valid keys in this section are ['accel_width', 'delta_width', 'frame_ms', ...]
 ```
 
-主要區段：
+Main sections:
 
-| 區段 | 重要欄位 |
+| Section | Key fields |
 | --- | --- |
-| `paths` | `data_root`、`train_dir`、`test_dir`、`demographics`、`cache_dir`、`results_dir` |
-| `mfcc` | `sample_rate`、`frame_ms`、`hop_ms`、`n_mels`、`n_ceps`、`lifter`、`preemph`、`low_freq`、`high_freq`、`use_deltas`、`delta_width`、`accel_width` |
-| `trim` | `mode`、`edge_seconds`、`min_seconds`、`min_output_seconds` |
-| `normalization` | `method`、`block_size`、`divisor`、`eps` |
-| `split` | `n_splits`、`seed`、`group_by`、`val_fraction` |
-| `detection` | `model.name`、`model.params`、`aggregation`、`threshold_method`、`threshold`、`target` |
-| `disorder` | `model.name`、`model.params`、`aggregation` |
-| `flat` | `model.name`、`model.params`、`aggregation` |
-| 頂層 | `seed`、`log_level` |
+| `paths` | `data_root`, `train_dir`, `test_dir`, `demographics`, `cache_dir`, `results_dir` |
+| `mfcc` | `sample_rate`, `frame_ms`, `hop_ms`, `n_mels`, `n_ceps`, `lifter`, `preemph`, `low_freq`, `high_freq`, `use_deltas`, `delta_width`, `accel_width` |
+| `trim` | `mode`, `edge_seconds`, `min_seconds`, `min_output_seconds` |
+| `normalization` | `method`, `block_size`, `divisor`, `eps` |
+| `split` | `n_splits`, `seed`, `group_by`, `val_fraction` |
+| `detection` | `model.name`, `model.params`, `aggregation`, `threshold_method`, `threshold`, `target` |
+| `disorder` | `model.name`, `model.params`, `aggregation` |
+| `flat` | `model.name`, `model.params`, `aggregation` |
+| Top level | `seed`, `log_level` |
 
-每條路線讀與自己同名的區段，`cascade` 則讀 `detection` 與 `disorder` 兩個區段。
+Each route reads the section named after it; `cascade` reads both `detection` and `disorder`.
 
-不帶 `--config` 時用的是內建預設值（`predict` 例外，它從結果資料夾的 `config.yaml` 開始）；`configs/default.yaml` 把同一組值完整寫出來（測試會檢查兩者一致），可以複製一份當作自己設定檔的起點。其他設定檔只寫該實驗用得到的區段，沒寫到的鍵沿用預設值；`seed`、`normalization` 這類區段即使和預設相同也照寫，方便對照。
+Without `--config` the built-in defaults apply (except for `predict`, which starts from the `config.yaml` in the results folder). `configs/default.yaml` writes the same values out in full (a test checks that the two agree), and a copy of it makes a good starting point for your own config file. The other config files hold only the sections their experiment uses, and any key they leave out keeps its default. Sections such as `seed` and `normalization` are written out even when they match the defaults, which makes the files easier to compare.
 
-每次執行都會把實際生效的完整設定寫成 `config.yaml`，存在該次結果資料夾中，所以任何一次實驗都能從自己的產出重跑：
+Every run writes the complete configuration it actually used to `config.yaml` in its results folder, so any experiment can be rerun from its own output:
 
 ```bash
 voice-pathology-detection train --route cascade --config results/cascade-20261008-101500/config.yaml
@@ -568,20 +573,20 @@ voice-pathology-detection train --route cascade --config results/cascade-2026100
 
 ---
 
-## 結果與評估指標
+## Results and metrics
 
-每次執行產生一個資料夾。以 `--route detection` 為例：
+Each run creates one folder. For `--route detection`:
 
 ```
 results/<run_id>/
-├── config.yaml              # 實際生效的完整設定
-├── metrics.json             # 所有指標（逐折 + 平均 ± 標準差 + 彙總）
-├── report.md                # 可讀的摘要報表
-├── predictions.csv          # 逐受試者的預測（每人恰好出現一次）
-├── folds_subject.csv        # 逐折的受試者層級指標
-├── folds_frame.csv          # 逐折的音框層級指標
-├── threshold_sweep.csv      # 門檻掃描結果
-├── detection.joblib         # 供 predict 使用的模型與門檻
+├── config.yaml              # the complete configuration in effect
+├── metrics.json             # every metric (per fold + mean ± std + pooled)
+├── report.md                # human-readable summary report
+├── predictions.csv          # per-subject predictions (each subject exactly once)
+├── folds_subject.csv        # subject-level metrics per fold
+├── folds_frame.csv          # frame-level metrics per fold
+├── threshold_sweep.csv      # threshold sweep
+├── detection.joblib         # model and threshold for predict
 └── figures/
     ├── confusion_subject.png
     ├── confusion_frame.png
@@ -590,102 +595,102 @@ results/<run_id>/
     └── roc.png
 ```
 
-其中幾項隨路線而異：
+Some of these depend on the route:
 
-| 檔案 | 哪些路線會有 |
+| File | Routes that write it |
 | --- | --- |
-| `config.yaml`、`metrics.json`、`report.md`、`predictions.csv` | 全部 |
-| `folds_subject.csv`、`folds_frame.csv` | `detection`、`disorder`、`flat`；`cascade` 不輸出逐折資料 |
-| `figures/confusion_subject.png`、`figures/confusion_frame.png`、`figures/folds_subject.png` | `detection`、`disorder`、`flat` |
-| `threshold_sweep.csv`、`figures/threshold.png`、`figures/roc.png` | 二元階段才有，即 `detection` 與 `cascade` |
-| `figures/confusion_four_way.png`、`figures/confusion_detection.png` | `cascade` |
-| `detection.joblib` | `detection`、`cascade` |
-| `disorder.joblib` | `disorder`、`cascade` |
+| `config.yaml`, `metrics.json`, `report.md`, `predictions.csv` | All |
+| `folds_subject.csv`, `folds_frame.csv` | `detection`, `disorder`, `flat`; `cascade` writes no per-fold data |
+| `figures/confusion_subject.png`, `figures/confusion_frame.png`, `figures/folds_subject.png` | `detection`, `disorder`, `flat` |
+| `threshold_sweep.csv`, `figures/threshold.png`, `figures/roc.png` | Only routes with a binary stage, i.e. `detection` and `cascade` |
+| `figures/confusion_four_way.png`, `figures/confusion_detection.png` | `cascade` |
+| `detection.joblib` | `detection`, `cascade` |
+| `disorder.joblib` | `disorder`, `cascade` |
 | `flat.joblib` | `flat` |
 
-加上 `--no-save-models` 不寫 `.joblib`。`--no-figures` 只是不畫 `figures/` 裡的圖，`threshold_sweep.csv` 照樣寫出。
+`--no-save-models` skips the `.joblib` files. `--no-figures` only skips the plots in `figures/`; `threshold_sweep.csv` is still written.
 
-`.joblib` 是交叉驗證結束後另外訓練、給 `predict` 用的模型。偵測器的門檻需要沒參與訓練的檔案，所以 `detection.joblib` 的做法和交叉驗證的每一折一樣：先依 `split.val_fraction` 切出內層驗證集，模型只在其餘的檔案上訓練（預設 0.2 時通常是五分之四，某一類的組數少於 5 時會再少一些），門檻在驗證集上選。`detection.threshold_method: fixed` 時，以及沒有門檻要選的 `disorder.joblib`、`flat.joblib`，用的是全部訓練檔案。
+The `.joblib` files hold models trained separately after cross-validation, for `predict` to use. The detector's threshold needs files that took no part in training, so `detection.joblib` is built the same way as each cross-validation fold: an inner validation set is split off according to `split.val_fraction`, the model is trained on the remaining files only (usually four fifths at the default 0.2, somewhat less when a class has fewer than 5 groups), and the threshold is chosen on the validation set. `disorder.joblib` and `flat.joblib` have no threshold to choose, so they are trained on all training files, and so is `detection.joblib` when `detection.threshold_method` is `fixed`.
 
-### 指標說明
+### Metrics
 
-| 指標 | 定義 | 為什麼看它 |
+| Metric | Definition | Why it matters |
 | --- | --- | --- |
-| UAR | 真實標籤中出現的各類別召回率的算術平均，與 `sklearn.metrics.balanced_accuracy_score` 相同 | 本任務的主要指標。正常 50 例、病理 150 例的不平衡下，準確率會獎勵「一律猜多數類」的模型，UAR 不會 |
-| Sensitivity（靈敏度） | $TP / (TP + FN)$ | 病理嗓音有多少被抓到 |
-| Specificity（特異度） | $TN / (TN + FP)$ | 正常嗓音有多少沒被誤判 |
-| PPV / NPV | $TP/(TP+FP)$、$TN/(TN+FN)$ | 以模型的判斷為條件，而不是以真實類別為條件。它隨盛行率改變，只能在類別比例相同的實驗之間比較 |
-| ROC-AUC | ROC 曲線下面積 | 與門檻無關，衡量排序能力本身 |
-| Confusion matrix | 混淆矩陣 | 哪一類被誤判成哪一類 |
+| UAR | Arithmetic mean of the per-class recalls over the classes present in the true labels, the same as `sklearn.metrics.balanced_accuracy_score` | The main metric for this task. With 50 normal and 150 pathological cases, accuracy rewards a model that always guesses the majority class; UAR does not |
+| Sensitivity | $TP / (TP + FN)$ | How many pathological voices are caught |
+| Specificity | $TN / (TN + FP)$ | How many normal voices are correctly called normal |
+| PPV / NPV | $TP/(TP+FP)$, $TN/(TN+FN)$ | Conditioned on the model's decision rather than on the true class. They shift with prevalence, so they can only be compared between experiments with the same class proportions |
+| ROC-AUC | Area under the ROC curve | Independent of the threshold; measures the ranking itself |
+| Confusion matrix | Counts of true against predicted classes | Which class is mistaken for which |
 
-靈敏度、特異度、PPV 與 NPV 一律以病理為陽性、正常為陰性。`flat` 與 `cascade` 的四類最終決策也是這樣算，三種病變合在一起當陽性，所以和 `detection` 的數字意義相同；`disorder` 沒有正常類別，這四項在 `metrics.json` 裡是 `null`（未定義的數值一律寫成 `null`）。`per_class_recall` 會列出每一個類別，真實標籤中沒有出現的類別記為 0，但不計入 UAR。
+Sensitivity, specificity, PPV and NPV always take pathological as positive and normal as negative. The four-class final decisions of `flat` and `cascade` are scored the same way, with the three disorders together as the positive class, so their numbers mean the same thing as those of `detection`. `disorder` has no normal class, which leaves these four `null` in `metrics.json` (any undefined value is written as `null`). `per_class_recall` lists every class; a class that does not appear in the true labels is recorded as 0 but does not count towards the UAR.
 
-`detection`、`disorder`、`flat` 的指標同時以音框層級與受試者層級輸出，一個模型可能音框層級看起來很強、受試者層級卻很弱，分開報告才看得出來。音框層級的彙總（`pooled_frame`）是把所有評估折的音框放在一起算一次，和它的混淆矩陣對得上。`cascade` 只有受試者層級。
+`detection`, `disorder` and `flat` report their metrics at both the frame level and the subject level. A model can look strong on frames and weak on subjects, and only separate reports show that. The pooled frame-level figures (`pooled_frame`) are computed once over the frames of all evaluation folds together and therefore match the frame-level confusion matrix. `cascade` has the subject level only.
 
-跨折結果一律回報 `平均 ± 標準差`，因為單一個平均數看不出各折差多少：平均同樣是 0.62，各折可能都在 0.62 附近，也可能散在 0.45–0.80。
+Results across folds are always reported as `mean ± std`, because a mean alone does not show how much the folds differ: a mean of 0.62 can come from folds that all sit near 0.62 or from folds scattered over 0.45–0.80.
 
-### 讀懂 cascade 的三張報表
+### Reading the three cascade reports
 
-兩階段串接會輸出三個視角：
+The two-stage cascade reports three views:
 
-1. `detection_summary`：第一階段本身表現如何。
-2. `disorder_summary`：在正確被送進第二階段的受試者上，三類分類的表現。
-3. `overall_summary`：合成後的四類最終決策，要引用整個系統的表現看這一張。
+1. `detection_summary`: how well stage 1 does on its own.
+2. `disorder_summary`: three-class performance on the subjects correctly passed to stage 2.
+3. `overall_summary`: the merged four-class final decision. This is the one to quote for the system as a whole.
 
-被第一階段誤放行的正常受試者，一定會被指派某個病變類別（必然是錯的）；被第一階段誤判為正常的病理受試者，永遠不會有機會被分類。這兩種錯誤都屬於串接系統的誤差，也都只會出現在第三張表裡。
+A normal subject that stage 1 wrongly lets through is always assigned some disorder, which is bound to be wrong. A pathological subject that stage 1 calls normal never gets a chance to be classified. Both are errors of the cascade as a system, and both show up only in the third report.
 
-`cascade` 不輸出逐折報表，`metrics.json` 裡是這三個視角的跨折 `mean` / `std` / `n`、全部受試者合併後的指標與混淆矩陣，以及每折的門檻與送進第二階段的人數。
-
----
-
-## 設計重點
-
-評估折只用一次。切分以檔案為單位，依 `split.group_by`（預設 `subject_id`）分組、依標籤分層，`check_no_group_leakage()` 每次執行都會確認同一組不會跨折。模型、正規化統計量與決策門檻都只來自訓練折，門檻用的是訓練折內部再切出的驗證集。各步驟用到哪些資料，列在 [docs/reproduce.md](docs/reproduce.md)。
-
-每次執行的完整設定、種子、指標與預測都寫進同一個結果資料夾。`set_global_seed()` 一次設定 `random`、NumPy 與（若已安裝）PyTorch，種子記錄在 `metrics.json`。沒指定 `--run-id` 時，資料夾名稱帶時間戳，同一秒內再跑一次會加上 `-2`、`-3`，不會寫進同一個資料夾。
-
-`detection`、`disorder`、`flat` 共用 `routes/stage.py` 的 `run_stage()`；`cascade` 重用同一組步驟函式（`inner_split`、`fit_normalizer`、`apply_normalizer`、`frame_posteriors`），所以四條路線的切分與評估方式相同。DBN 的預訓練可以用 `pretrain: false` 關掉，SVM、線性 SVM 與 GMM 也走同一套切分與評估，網路的複雜度值不值得，可以在相同條件下比較。
-
-一份錄音就有數十到數百個音框，所以音框到受試者的聚合用 `np.add.reduceat` 一次做完，門檻掃描用一個布林矩陣算完，最大熵求解也對所有參數同時做牛頓迭代，都不逐檔跑 Python 迴圈。函式庫本身不 `print`，訊息都走 `logging`；命令列印出多少訊息由設定檔的 `log_level` 決定，`--log-level` 可以臨時蓋過它（`spectrograms` 與 `demo` 不讀設定檔，預設就是 INFO）。
+`cascade` writes no per-fold reports. Its `metrics.json` holds the cross-fold `mean` / `std` / `n` of the three views, the metrics and confusion matrices over all subjects pooled, and for each fold the threshold and the number of subjects sent to stage 2.
 
 ---
 
-## 開發與測試
+## Design notes
+
+An evaluation fold is used once, to score the model, and for nothing else. Files are split in groups by `split.group_by` (`subject_id` by default) and stratified by label, and `check_no_group_leakage()` confirms on every run that no group crosses folds. The model, the normalization statistics and the decision threshold all come from the training folds only, the threshold from a validation set split off inside them. [docs/reproduce.md](docs/reproduce.md) lists which data each step uses.
+
+The complete configuration, seed, metrics and predictions of a run are all written to one results folder. `set_global_seed()` seeds `random`, NumPy and, if it is installed, PyTorch in one call, and the seed is recorded in `metrics.json`. Without `--run-id` the folder name carries a timestamp, and a second run within the same second gets `-2`, `-3` appended instead of writing into the same folder.
+
+`detection`, `disorder` and `flat` share `run_stage()` in `routes/stage.py`, and `cascade` reuses its step functions (`inner_split`, `fit_normalizer`, `apply_normalizer`, `frame_posteriors`), so all four routes split and evaluate identically. DBN pre-training can be switched off with `pretrain: false`, and the SVM, linear SVM and GMM run through the same splits and evaluation. That makes it a fair test of whether the network's complexity pays off.
+
+A single recording has tens to hundreds of frames, so the frame-to-subject aggregation is done in one `np.add.reduceat` call, the threshold sweep comes from one boolean matrix, and the maximum-entropy solver runs its Newton iterations on all parameters at once. None of them loops over files in Python. The library itself never calls `print`; messages go through `logging`. How much the command line prints is set by `log_level` in the config file, and `--log-level` overrides it for a single run (`spectrograms` and `demo` read no config file and default to INFO).
+
+---
+
+## Development and testing
 
 ```bash
-# 執行測試（同時跑單元測試與 docstring 範例）
+# Run the tests (unit tests and docstring examples together)
 pytest -q
 
-# 靜態檢查
+# Static checks
 ruff check .
 ruff format --check .
 
-# 單獨跑某個模組的測試
+# Tests for a single module
 pytest tests/test_features.py -v
 ```
 
-測試共 435 項，354 個單元測試加上 81 個 docstring 範例，全部使用程式合成的 fixture：已知頻率的正弦波、人工生成的特徵矩陣與標籤，以及用源濾波模型合成的人工母音，不讀取任何真實錄音。
+There are 435 tests, 354 unit tests plus 81 docstring examples, and all of them use synthetic fixtures: sine waves of known frequency, generated feature matrices and labels, and artificial vowels made with a source-filter model. No real recording is read.
 
-測試檢查的是數學性質和流程上一定要成立的條件，不拿輸出去對存好的結果。例如一階差分對線性斜坡必須回傳斜率本身；UAR 必須等於 `sklearn.metrics.balanced_accuracy_score`；最大熵的解必須與 `scipy.optimize.brentq` 獨立求根的結果一致；同一位受試者不跨折；每位受試者在 out-of-fold 預測中恰好出現一次；正規化統計量不會從測試資料洩漏。
+The tests check mathematical properties and conditions the pipeline must always meet, rather than comparing output with stored results. For example, the first-order delta of a linear ramp must return the slope itself; UAR must equal `sklearn.metrics.balanced_accuracy_score`; the maximum-entropy solution must agree with an independent root found by `scipy.optimize.brentq`; no subject crosses folds; every subject appears exactly once in the out-of-fold predictions; and no normalization statistic leaks from the test data.
 
-需要 PyTorch 的測試以 `pytest.importorskip` 略過；沒裝 PyTorch 也能匯入整個套件，其餘測試照樣要過。CI 會跑 `ruff check` 與 `ruff format --check`（`target-version = "py310"`），再用 `ast.parse(..., feature_version=(3, 10))` 逐檔檢查語法。
+Tests that need PyTorch are skipped via `pytest.importorskip` when it is not installed. The whole package imports without PyTorch, and every other test still has to pass. CI runs `ruff check` and `ruff format --check` (`target-version = "py310"`), then checks the syntax of every file with `ast.parse(..., feature_version=(3, 10))`.
 
 ---
 
 ## References
 
-### 特徵抽取
+### Feature extraction
 
 - S. B. Davis and P. Mermelstein, "Comparison of parametric representations for monosyllabic word recognition in continuously spoken sentences," *IEEE Transactions on Acoustics, Speech, and Signal Processing*, vol. 28, no. 4, pp. 357–366, 1980.
 - S. Furui, "Speaker-independent isolated word recognition using dynamic features of speech spectrum," *IEEE Transactions on Acoustics, Speech, and Signal Processing*, vol. 34, no. 1, pp. 52–59, 1986.
 - S. Young, G. Evermann, M. Gales, et al., *The HTK Book (for HTK Version 3.4)*, Cambridge University Engineering Department, 2006.
 
-### 倒頻譜正規化
+### Cepstral normalization
 
 - S. Furui, "Cepstral analysis technique for automatic speaker verification," *IEEE Transactions on Acoustics, Speech, and Signal Processing*, vol. 29, no. 2, pp. 254–272, 1981.
 - O. Viikki and K. Laurila, "Cepstral domain segmental feature vector normalization for noise robust speech recognition," *Speech Communication*, vol. 25, no. 1–3, pp. 133–147, 1998.
 
-### 深度學習
+### Deep learning
 
 - G. E. Hinton, S. Osindero, and Y.-W. Teh, "A fast learning algorithm for deep belief nets," *Neural Computation*, vol. 18, no. 7, pp. 1527–1554, 2006.
 - G. E. Hinton and R. R. Salakhutdinov, "Reducing the dimensionality of data with neural networks," *Science*, vol. 313, no. 5786, pp. 504–507, 2006.
@@ -696,13 +701,13 @@ pytest tests/test_features.py -v
 - E. T. Jaynes, "Information theory and statistical mechanics," *Physical Review*, vol. 106, no. 4, pp. 620–630, 1957.
 - S. F. Chen and R. Rosenfeld, "A survey of smoothing techniques for ME models," *IEEE Transactions on Speech and Audio Processing*, vol. 8, no. 1, pp. 37–50, 2000.
 
-### 對照方法
+### Baselines
 
 - C. Cortes and V. Vapnik, "Support-vector networks," *Machine Learning*, vol. 20, no. 3, pp. 273–297, 1995.
 - D. A. Reynolds and R. C. Rose, "Robust text-independent speaker identification using Gaussian mixture speaker models," *IEEE Transactions on Speech and Audio Processing*, vol. 3, no. 1, pp. 72–83, 1995.
 - J. I. Godino-Llorente, P. Gómez-Vilda, and M. Blanco-Velasco, "Dimensionality reduction of a pathological voice quality assessment system based on Gaussian mixture models and short-term cepstral parameters," *IEEE Transactions on Biomedical Engineering*, vol. 53, no. 10, pp. 1943–1953, 2006.
 
-### 任務、資料集與評估
+### Task, dataset and evaluation
 
 - A. Ramalingam, S. Kedari, and C. Vuppalapati, "IEEE FEMH Voice Data Challenge 2018," *2018 IEEE International Conference on Big Data (Big Data)*, 2018. doi:10.1109/BigData.2018.8622164
 - S.-H. Fang, Y. Tsao, M.-J. Hsiao, J.-Y. Chen, Y.-H. Lai, F.-C. Lin, and C.-T. Wang, "Detection of pathological voice using cepstrum vectors: A deep learning approach," *Journal of Voice*, vol. 33, no. 5, pp. 634–641, 2019. doi:10.1016/j.jvoice.2018.02.003
@@ -710,12 +715,12 @@ pytest tests/test_features.py -v
 - W. J. Youden, "Index for rating diagnostic tests," *Cancer*, vol. 3, no. 1, pp. 32–35, 1950.
 - L. R. Rabiner and M. R. Sambur, "An algorithm for determining the endpoints of isolated utterances," *Bell System Technical Journal*, vol. 54, no. 2, pp. 297–315, 1975.
 
-> 四個類別，以及 `prepare` 預設比對的檔案數（Normal 50、Neoplasm 40、Phonotrauma 60、Vocal palsy 50），來自 FEMH Voice Data Challenge 2018 資料集的 200 份訓練錄音。資料集需向主辦單位申請，不隨本套件散布。
+> The four classes, and the file counts `prepare` checks against by default (Normal 50, Neoplasm 40, Phonotrauma 60, Vocal palsy 50), come from the 200 training recordings of the FEMH Voice Data Challenge 2018 dataset. The dataset has to be requested from the organizers and is not distributed with this package.
 
 ---
 
-## 授權
+## License
 
-MIT License，詳見 [LICENSE](LICENSE)。
+MIT License, see [LICENSE](LICENSE).
 
-作者：RL
+Author: RL

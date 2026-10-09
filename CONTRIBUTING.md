@@ -72,7 +72,7 @@ python -c "import ast,pathlib; [ast.parse(f.read_text(encoding='utf-8'), filenam
 
 - 每個模組開頭加 `from __future__ import annotations`。
 - 公開函式要有 type hints 與英文的 numpy 風格 docstring；實作的是某篇文獻的方法，就在 `References` 段寫出處。
-- 給使用者看的文件（README、`docs/`、這份文件）用繁體中文寫。
+- README 有兩份：`README.md` 是英文，`README.zh-TW.md` 是繁體中文，改了其中一份就要同步另一份。其他給使用者看的文件（`docs/`、這份文件）用繁體中文寫。
 - 診斷訊息用 `logging` 輸出，不要用 `print`。
 - 陣列運算盡量向量化，不寫逐元素的 Python 迴圈。
 
