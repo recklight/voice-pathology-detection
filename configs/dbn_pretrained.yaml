@@ -1,0 +1,44 @@
+# The same topology as detection_dnn.yaml, but initialised by unsupervised
+# layer-wise pre-training instead of at random. Set pretrain: false to measure
+# what the pre-training is actually worth on your data.
+seed: 0
+
+normalization:
+  method: cmvn
+
+detection:
+  model:
+    name: dbn
+    params:
+      hidden_layer_sizes: [200, 200, 200, 200, 200]
+      pretrain: true
+      pretrain_epochs: 5
+      pretrain_learning_rate: 0.05
+      cd_steps: 1
+      update: cd
+      max_iter: 30
+      batch_size: 90
+  aggregation: mean_proba
+  threshold_method: youden
+
+disorder:
+  model:
+    name: dbn
+    params:
+      hidden_layer_sizes: [100, 100, 100, 100]
+      pretrain: true
+      pretrain_epochs: 5
+      max_iter: 30
+      batch_size: 80
+  aggregation: mean_proba
+
+flat:
+  model:
+    name: dbn
+    params:
+      hidden_layer_sizes: [100, 100, 100, 100]
+      pretrain: true
+      pretrain_epochs: 5
+      max_iter: 30
+      batch_size: 80
+  aggregation: mean_proba

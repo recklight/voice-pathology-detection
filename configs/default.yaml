@@ -1,0 +1,87 @@
+# The built-in defaults written out in full (tests/test_config.py checks that
+# the two agree). A command run without --config uses exactly these values,
+# except predict, which starts from the config.yaml of its run folder.
+# Copy this file to configs/local.yaml to start a configuration of your own.
+seed: 0
+log_level: INFO
+
+paths:
+  # Point this at your own copy of the corpus; no audio ships with the package.
+  data_root: data/corpus
+  train_dir: train
+  test_dir: test
+  demographics: null
+  cache_dir: cache
+  results_dir: results
+
+mfcc:
+  sample_rate: 44100
+  frame_ms: 30.0
+  hop_ms: 15.0
+  n_mels: 23
+  n_ceps: 12
+  lifter: 22
+  preemph: 0.97
+  low_freq: 64.0
+  high_freq: null
+  n_fft: null
+  use_deltas: true
+  delta_width: 7
+  accel_width: 5
+
+trim:
+  mode: fixed_edges
+  edge_seconds: 2.0
+  min_seconds: 4.5
+  min_output_seconds: 0.5
+  frame_ms: 25.0
+  hop_ms: 10.0
+
+normalization:
+  method: cmvn
+  block_size: 13
+  divisor: std
+  eps: 1.0e-08
+
+split:
+  n_splits: 5
+  seed: 0
+  group_by: subject_id
+  # Held out as 1/k of each training fold, k = round(1 / val_fraction); at most 0.5.
+  val_fraction: 0.2
+
+detection:
+  model:
+    name: mlp
+    params:
+      hidden_layer_sizes: [200, 200, 200, 200, 200]
+      max_iter: 30
+      batch_size: 90
+      learning_rate_init: 0.001
+      momentum: 0.5
+  aggregation: mean_proba
+  threshold_method: youden
+  threshold: null
+  target: 0.9
+
+disorder:
+  model:
+    name: mlp
+    params:
+      hidden_layer_sizes: [100, 100, 100, 100]
+      max_iter: 30
+      batch_size: 80
+      learning_rate_init: 0.001
+      momentum: 0.5
+  aggregation: mean_proba
+
+flat:
+  model:
+    name: mlp
+    params:
+      hidden_layer_sizes: [100, 100, 100, 100]
+      max_iter: 30
+      batch_size: 80
+      learning_rate_init: 0.001
+      momentum: 0.5
+  aggregation: mean_proba

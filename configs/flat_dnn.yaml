@@ -1,0 +1,22 @@
+# Single-stage route: Normal / Neoplasm / Phonotrauma / Vocal palsy with a
+# four-layer network, for comparison with the two-stage cascade.
+seed: 0
+
+normalization:
+  method: cmvn
+
+split:
+  n_splits: 5
+  seed: 0
+
+flat:
+  model:
+    name: mlp
+    params:
+      hidden_layer_sizes: [100, 100, 100, 100]
+      max_iter: 30
+      batch_size: 80
+      learning_rate_init: 0.001
+      momentum: 0.5
+      early_stopping: true
+  aggregation: mean_proba

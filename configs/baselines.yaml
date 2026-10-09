@@ -1,0 +1,36 @@
+# Shallow reference points. Run these on the same folds as the networks;
+# a network that does not beat them is not earning its complexity.
+seed: 0
+
+normalization:
+  method: cmvn
+
+detection:
+  model:
+    name: svm
+    params:
+      kernel: rbf
+      C: 1.0
+      gamma: scale
+      class_weight: balanced
+      probability: true
+  aggregation: mean_proba
+  threshold_method: youden
+
+disorder:
+  model:
+    name: gmm
+    params:
+      n_components: 8
+      covariance_type: diag
+      priors: uniform
+  aggregation: mean_proba
+
+flat:
+  model:
+    name: gmm
+    params:
+      n_components: 8
+      covariance_type: diag
+      priors: uniform
+  aggregation: mean_proba

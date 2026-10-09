@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+
+# Testing / linting caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Project data and outputs (never commit patient recordings or results).
+# The patterns are anchored to the repository root, so src/voice_pathology_detection/data/ (the
+# data-handling subpackage) is not caught; dir/* keeps the .gitkeep negations working.
+data/*
+!data/.gitkeep
+results/*
+!results/.gitkeep
+/cache/
+/runs/
+*.wav
+*.mfc
+*.mat
+*.npy
+*.npz
+*.joblib
+# Label tables, index sidecars and prediction tables hold file names and diagnoses.
+*.xlsx
+*.csv
+*.tsv
+# Local configurations carry the path of your own corpus.
+configs/local*.yaml
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

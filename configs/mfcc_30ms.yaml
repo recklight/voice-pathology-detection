@@ -1,0 +1,26 @@
+# Front end only: a 30 ms / 15 ms analysis of 44.1 kHz recordings, 23 mel
+# filters, 12 cepstral coefficients plus c0, expanded to 39 dimensions.
+# These are the built-in defaults with n_fft pinned to 2048, the size a 30 ms
+# frame resolves to at 44.1 kHz. --config takes a single file, so copy the
+# mfcc and trim sections into your own configuration, or set single values
+# on the command line, e.g.
+#   voice-pathology-detection train -c configs/detection_dnn.yaml -s mfcc.n_fft=2048
+mfcc:
+  sample_rate: 44100
+  frame_ms: 30.0
+  hop_ms: 15.0
+  n_mels: 23
+  n_ceps: 12
+  lifter: 22
+  preemph: 0.97
+  low_freq: 64.0
+  high_freq: null
+  n_fft: 2048
+  use_deltas: true
+  delta_width: 7
+  accel_width: 5
+
+trim:
+  mode: fixed_edges
+  edge_seconds: 2.0
+  min_seconds: 4.5

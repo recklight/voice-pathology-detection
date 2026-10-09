@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-pathology-detection"
+version = "0.1.0"
+description = "Pathological voice detection and classification from sustained vowels using cepstral features and neural networks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "RL" }]
+maintainers = [{ name = "RL" }]
+keywords = [
+    "pathological-voice",
+    "voice-disorder",
+    "mfcc",
+    "deep-belief-network",
+    "speech-processing",
+    "medical-signal-processing",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Typing :: Typed",
+]
+dependencies = [
+    "speechdsp>=0.2.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.2",
+    "pandas>=1.5",
+    "matplotlib>=3.6",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+    "joblib>=1.2",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dl = ["torch>=2.2"]
+dev = ["pytest>=7.2", "ruff>=0.4"]
+
+[project.urls]
+Homepage = "https://github.com/recklight/voice-pathology-detection"
+Repository = "https://github.com/recklight/voice-pathology-detection"
+Issues = "https://github.com/recklight/voice-pathology-detection/issues"
+Changelog = "https://github.com/recklight/voice-pathology-detection/blob/master/CHANGELOG.md"
+
+[project.scripts]
+voice-pathology-detection = "voice_pathology_detection.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+voice_pathology_detection = ["py.typed"]
+
+[tool.pytest.ini_options]
+minversion = "7.2"
+testpaths = ["tests", "src"]
+# "src" makes the package importable straight from a checkout, without installing.
+pythonpath = ["src"]
+addopts = "-ra --doctest-modules"
+filterwarnings = [
+    "ignore::sklearn.exceptions.ConvergenceWarning",
+    "ignore:.*does not fit n_fft.*:UserWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests", "examples"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+"examples/*" = ["E402", "T201"]
+
+[tool.ruff.format]
+# The README's code examples keep hand-aligned comments; the formatter would undo them.
+exclude = ["*.md"]
